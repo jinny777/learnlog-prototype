@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from "react";
+import { supabase, uploadImage } from "./lib/supabase";
+import { summarizeText, generateDraft } from "./lib/ai";
 
 const C = {
   primary: "#5B4FE8",
@@ -15,46 +17,17 @@ const C = {
   border: "#E8E8E8",
   bg: "#F5F4F2",
   white: "#fff",
+  red: "#e33",
   tagColors: {
     "마케팅": { bg: "#EEEDFE", text: "#3C3489" },
     "독서": { bg: "#E1F5EE", text: "#085041" },
     "개발": { bg: "#E6F1FB", text: "#0C447C" },
     "디자인": { bg: "#FBEAF0", text: "#72243E" },
-  }
-};
-
-const SERIES = [
-  { id: 1, name: "그로스 해킹 A-Z", count: 3, goal: 5, color: "#EEEDFE", textColor: "#3C3489" },
-  { id: 2, name: "린 스타트업 독서", count: 1, goal: 4, color: "#E1F5EE", textColor: "#085041" },
-];
-
-const LOGS = [
-  { id: 1, tag: "마케팅", title: "그로스 해킹 — 퍼널 분석 기초", source: "인프런", date: "어제", published: true, seriesId: 1,
-    points: ["AARRR 퍼널의 각 단계별 역할과 지표 설정 방법", "활성화율이 리텐션보다 먼저 해결되어야 하는 이유", "코호트 분석으로 이탈 구간을 찾는 실전 방법"],
-    memo: "클라이언트 제안서에 바로 쓸 수 있는 내용. 다음 달 콘텐츠 시리즈로 묶으면 좋겠다." },
-  { id: 2, tag: "독서", title: "린 스타트업 — 3장 검증된 학습", source: "독서 모임", date: "3일 전", published: false, seriesId: 2,
-    points: ["MVP는 최소 기능이 아니라 최소 학습 도구", "허영 지표 vs 실행 지표의 차이", "피벗의 기준: 전략 변경이지 실패가 아님"],
-    memo: "독자들이 공감할 만한 '창업 착각 시리즈'로 이어갈 수 있겠다." },
-  { id: 3, tag: "마케팅", title: "그로스 해킹 — 리텐션 전략", source: "인프런", date: "5일 전", published: true, seriesId: 1,
-    points: ["리텐션 루프 설계 방법", "알림 전략의 올바른 사용법", "D7·D30 리텐션 벤치마크"],
-    memo: "SaaS 클라이언트 케이스에 딱 맞는 내용. 사례 중심으로 발행하면 반응 좋을 것 같다." },
-];
-
-const AI_DRAFT = {
-  title: "그로스 해킹의 시작: 퍼널을 제대로 읽는 법",
-  body: `퍼널이 새고 있다면, 먼저 어디서 새는지 알아야 한다.
-
-AARRR 퍼널은 단순한 깔때기가 아니다. 각 단계는 독립적인 문제를 가지고 있고, 해결 순서도 중요하다.
-
-특히 '활성화(Activation)'를 리텐션보다 먼저 해결해야 한다는 논리가 명쾌했다. 새는 바가지에 물을 계속 부어도 소용없듯, 사용자가 첫 경험에서 가치를 느끼지 못하면 어떤 리텐션 전략도 의미가 없다.
-
-코호트 분석으로 이탈 구간을 찾는 방법도 실전적이었다. 가입 시점별로 묶어서 보면 어느 시기 사용자가 어디서 이탈하는지 패턴이 보인다.
-
-다음 글에서는 실제 코호트 분석 세팅 방법을 다룰 예정이다.`
+  },
 };
 
 const s = {
-  phone: { width: 375, background: C.white, display: "flex", flexDirection: "column", minHeight: 720, fontFamily: "'Noto Sans KR', sans-serif", position: "relative", overflow: "hidden" },
+  phone: { width: 375, background: C.white, display: "flex", flexDirection: "column", height: 720, fontFamily: "'Noto Sans KR', sans-serif", position: "relative" },
   statusBar: { height: 44, background: C.primary, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 20px", flexShrink: 0 },
   appBar: { height: 52, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 20px", background: C.white, borderBottom: `0.5px solid ${C.border}`, flexShrink: 0 },
   scroll: { flex: 1, overflowY: "auto", padding: "16px 20px", background: C.bg },
@@ -66,6 +39,17 @@ const s = {
   input: { width: "100%", background: C.white, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 14px", fontSize: 14, color: C.text, outline: "none", boxSizing: "border-box", fontFamily: "inherit" },
   label: { fontSize: 12, fontWeight: 600, color: C.textSub, marginBottom: 5, display: "block" },
 };
+
+function formatDate(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  if (isNaN(d)) return dateStr;
+  const diff = Math.floor((Date.now() - d) / 86400000);
+  if (diff === 0) return "오늘";
+  if (diff === 1) return "어제";
+  if (diff < 7) return `${diff}일 전`;
+  return d.toLocaleDateString("ko-KR", { month: "short", day: "numeric" });
+}
 
 function StatusBar() {
   return (
@@ -120,134 +104,6 @@ function ProgressBar({ value, max, color }) {
   );
 }
 
-function HomeScreen({ navigate }) {
-  return (
-    <div style={s.phone}>
-      <StatusBar />
-      <div style={{ ...s.appBar, justifyContent: "space-between" }}>
-        <span style={{ fontSize: 20, fontWeight: 700, color: C.primary }}>LearnLog</span>
-        <IconBtn icon="⌕" color={C.textSub} />
-      </div>
-      <div style={s.scroll}>
-        <div style={{ background: C.primary, borderRadius: 16, padding: "16px 18px", marginBottom: 14, color: C.white }}>
-          <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.8, marginBottom: 10, letterSpacing: "0.5px" }}>MY PORTFOLIO</div>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
-            <div>
-              <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1 }}>8</div>
-              <div style={{ fontSize: 11, opacity: 0.8, marginTop: 3 }}>총 발행 글</div>
-            </div>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>23</div>
-              <div style={{ fontSize: 11, opacity: 0.8 }}>총 기록</div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>2</div>
-              <div style={{ fontSize: 11, opacity: 0.8 }}>진행 중 시리즈</div>
-            </div>
-          </div>
-        </div>
-
-        <div style={{ fontSize: 11, fontWeight: 600, color: C.textHint, letterSpacing: "0.5px", marginBottom: 8, textTransform: "uppercase" }}>진행 중 시리즈</div>
-        {SERIES.map(ser => (
-          <div key={ser.id} style={{ ...s.card, marginBottom: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-              <div>
-                <span style={{ fontSize: 10, fontWeight: 600, background: ser.color, color: ser.textColor, padding: "2px 7px", borderRadius: 4, display: "inline-block", marginBottom: 5 }}>시리즈</span>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{ser.name}</div>
-              </div>
-              <span style={{ fontSize: 12, color: C.textHint, fontWeight: 500 }}>{ser.count}/{ser.goal}편</span>
-            </div>
-            <ProgressBar value={ser.count} max={ser.goal} color={ser.textColor} />
-            {ser.count >= ser.goal - 1 && (
-              <div style={{ fontSize: 10, color: C.amber, fontWeight: 600, marginTop: 6 }}>✦ {ser.goal}편 완성 시 전자책 묶기 가능해요</div>
-            )}
-          </div>
-        ))}
-
-        <div style={{ fontSize: 11, fontWeight: 600, color: C.textHint, letterSpacing: "0.5px", margin: "14px 0 8px", textTransform: "uppercase" }}>최근 기록</div>
-        {LOGS.map(log => {
-          const ser = SERIES.find(s => s.id === log.seriesId);
-          return (
-            <div key={log.id} style={s.card} onClick={() => navigate("detail", { log })}>
-              <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
-                <span style={s.tag(log.tag)}>{log.tag}</span>
-                {ser && <span style={{ fontSize: 9, color: C.textHint, background: C.bg, padding: "1px 6px", borderRadius: 4, fontWeight: 500 }}>{ser.name}</span>}
-              </div>
-              <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 4, lineHeight: 1.4 }}>{log.title}</div>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontSize: 11, color: C.textHint }}>{log.date} · {log.source}</span>
-                {log.published
-                  ? <span style={{ fontSize: 10, color: C.green, fontWeight: 600, background: C.greenLight, padding: "2px 7px", borderRadius: 4 }}>발행 완료</span>
-                  : <span style={{ fontSize: 10, color: C.primary, fontWeight: 500, background: C.primaryLight, padding: "2px 7px", borderRadius: 4 }}>미발행</span>}
-              </div>
-            </div>
-          );
-        })}
-        <div style={{ height: 70 }} />
-      </div>
-
-      <button onClick={() => navigate("new")} style={{ position: "absolute", bottom: 76, right: 20, width: 52, height: 52, background: C.primary, border: "none", borderRadius: "50%", cursor: "pointer", fontSize: 26, color: C.white, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10 }}>＋</button>
-      <TabBar active="home" navigate={navigate} />
-    </div>
-  );
-}
-
-function PortfolioScreen({ navigate }) {
-  return (
-    <div style={s.phone}>
-      <StatusBar />
-      <div style={{ ...s.appBar, justifyContent: "space-between" }}>
-        <span style={{ fontSize: 18, fontWeight: 700, color: C.text }}>포트폴리오</span>
-        <span style={{ fontSize: 12, color: C.primary, fontWeight: 600, cursor: "pointer" }}>공유 링크</span>
-      </div>
-      <div style={s.scroll}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-          {[
-            { label: "총 발행", value: "8편", color: C.primary },
-            { label: "총 기록", value: "23건", color: C.textSub },
-            { label: "발행률", value: "35%", color: C.green },
-          ].map(m => (
-            <div key={m.label} style={{ flex: 1, background: C.white, borderRadius: 12, padding: "12px 10px", border: `0.5px solid ${C.border}`, textAlign: "center" }}>
-              <div style={{ fontSize: 20, fontWeight: 700, color: m.color }}>{m.value}</div>
-              <div style={{ fontSize: 10, color: C.textHint, marginTop: 2 }}>{m.label}</div>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ fontSize: 11, fontWeight: 600, color: C.textHint, letterSpacing: "0.5px", marginBottom: 8, textTransform: "uppercase" }}>시리즈 현황</div>
-        {SERIES.map(ser => (
-          <div key={ser.id} style={{ ...s.card }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-              <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{ser.name}</div>
-              <span style={{ fontSize: 11, color: C.textHint }}>{ser.count}/{ser.goal}편</span>
-            </div>
-            <ProgressBar value={ser.count} max={ser.goal} />
-            {ser.count >= ser.goal - 1 && (
-              <div style={{ marginTop: 8, background: C.amberLight, borderRadius: 8, padding: "8px 10px", fontSize: 11, color: C.amber, fontWeight: 500 }}>
-                ✦ 1편만 더 쓰면 전자책으로 묶을 수 있어요!
-              </div>
-            )}
-          </div>
-        ))}
-
-        <div style={{ fontSize: 11, fontWeight: 600, color: C.textHint, letterSpacing: "0.5px", margin: "14px 0 8px", textTransform: "uppercase" }}>발행 이력</div>
-        {LOGS.filter(l => l.published).map(log => (
-          <div key={log.id} style={{ ...s.card, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ flex: 1 }}>
-              <span style={s.tag(log.tag)}>{log.tag}</span>
-              <div style={{ fontSize: 13, fontWeight: 600, color: C.text, lineHeight: 1.4 }}>{log.title}</div>
-              <div style={{ fontSize: 11, color: C.textHint, marginTop: 3 }}>{log.date} · 브런치</div>
-            </div>
-            <span style={{ fontSize: 18, marginLeft: 8, color: C.textHint }}>↗</span>
-          </div>
-        ))}
-        <div style={{ height: 20 }} />
-      </div>
-      <TabBar active="portfolio" navigate={navigate} />
-    </div>
-  );
-}
-
 function VoicePanel({ onClose, onDone }) {
   const [phase, setPhase] = useState("idle");
   const [transcript, setTranscript] = useState("");
@@ -266,17 +122,13 @@ function VoicePanel({ onClose, onDone }) {
 
   const startRecording = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      alert("Chrome 브라우저에서만 음성 인식이 지원됩니다.");
-      return;
-    }
+    if (!SR) { alert("Chrome 브라우저에서만 음성 인식이 지원됩니다."); return; }
     const rec = new SR();
     rec.lang = "ko-KR";
     rec.continuous = true;
     rec.interimResults = true;
     recognitionRef.current = rec;
     finalRef.current = "";
-
     rec.onresult = (e) => {
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -297,29 +149,33 @@ function VoicePanel({ onClose, onDone }) {
     runSummarize(finalRef.current || transcript);
   };
 
-  const runSummarize = (text) => {
+  const runSummarize = async (text) => {
     setTranscript(text);
     setPhase("processing");
     setProgress(0);
-    setProcessStep("음성을 텍스트로 변환하는 중...");
+    setProcessStep("AI가 핵심 내용을 분석하는 중...");
+
     let p = 0;
     const iv = setInterval(() => {
-      p += 2.5;
-      setProgress(Math.min(p, 100));
-      if (p >= 45) setProcessStep("AI가 핵심 내용을 요약하는 중...");
-      if (p >= 100) {
-        clearInterval(iv);
-        const sents = text
-          .replace(/[.!?。]+/g, "|")
-          .split("|")
-          .map(s => s.trim())
-          .filter(s => s.length > 6);
-        onDone({
-          points: [sents[0] || "", sents[1] || "", sents[2] || ""],
-          memo: sents.slice(3, 5).join(" ") || text.slice(0, 100),
-        });
-      }
-    }, 40);
+      p += 2;
+      setProgress(Math.min(p, 85));
+      if (p >= 40) setProcessStep("AI가 핵심 내용을 요약하는 중...");
+    }, 80);
+
+    try {
+      const result = await summarizeText(text);
+      clearInterval(iv);
+      setProgress(100);
+      setTimeout(() => onDone({ points: result.points || [], memo: result.memo || "" }), 300);
+    } catch {
+      clearInterval(iv);
+      const sents = text.replace(/[.!?。]+/g, "|").split("|").map(s => s.trim()).filter(s => s.length > 6);
+      setProgress(100);
+      setTimeout(() => onDone({
+        points: [sents[0] || "", sents[1] || "", sents[2] || ""],
+        memo: sents.slice(3, 5).join(" ") || text.slice(0, 100),
+      }), 300);
+    }
   };
 
   const handleFile = (e) => {
@@ -336,12 +192,8 @@ function VoicePanel({ onClose, onDone }) {
       if (p >= 100) {
         clearInterval(iv);
         onDone({
-          points: [
-            "AARRR 퍼널의 각 단계별 역할과 지표 설정 방법",
-            "활성화율이 리텐션보다 먼저 해결되어야 하는 이유",
-            "코호트 분석으로 이탈 구간을 찾는 실전 방법",
-          ],
-          memo: "클라이언트 제안서에 바로 쓸 수 있는 내용. 다음 달 콘텐츠 시리즈로 묶으면 좋겠다.",
+          points: ["핵심 포인트 1", "핵심 포인트 2", "핵심 포인트 3"],
+          memo: "파일에서 추출한 내용을 직접 편집해주세요.",
         });
       }
     }, 50);
@@ -364,10 +216,10 @@ function VoicePanel({ onClose, onDone }) {
   );
 
   if (phase === "recording") return (
-    <div style={{ background: C.white, borderRadius: 14, border: `1.5px solid #e33`, padding: "14px 16px", marginBottom: 14 }}>
+    <div style={{ background: C.white, borderRadius: 14, border: `1.5px solid ${C.red}`, padding: "14px 16px", marginBottom: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-        <div style={{ width: 9, height: 9, borderRadius: "50%", background: dotOn ? "#e33" : "transparent", border: "1.5px solid #e33", flexShrink: 0 }} />
-        <span style={{ fontSize: 13, fontWeight: 600, color: "#e33" }}>녹음 중</span>
+        <div style={{ width: 9, height: 9, borderRadius: "50%", background: dotOn ? C.red : "transparent", border: `1.5px solid ${C.red}`, flexShrink: 0 }} />
+        <span style={{ fontSize: 13, fontWeight: 600, color: C.red }}>녹음 중</span>
         <span style={{ fontSize: 11, color: C.textHint, marginLeft: "auto" }}>말씀하세요</span>
       </div>
       <div style={{ background: C.bg, borderRadius: 10, padding: "10px 12px", minHeight: 72, fontSize: 13, color: C.text, lineHeight: 1.7, marginBottom: 12 }}>
@@ -395,14 +247,179 @@ function VoicePanel({ onClose, onDone }) {
   return null;
 }
 
-function NewScreen({ navigate }) {
+function HomeScreen({ logs, series, navigate }) {
+  const seriesWithCount = series.map(ser => ({
+    ...ser,
+    count: logs.filter(l => l.series_id === ser.id).length,
+  }));
+  const publishedCount = logs.filter(l => l.published).length;
+  const recentLogs = logs.slice(0, 10);
+
+  return (
+    <div style={s.phone}>
+      <StatusBar />
+      <div style={{ ...s.appBar, justifyContent: "space-between" }}>
+        <span style={{ fontSize: 20, fontWeight: 700, color: C.primary }}>LearnLog</span>
+        <IconBtn icon="⌕" color={C.textSub} />
+      </div>
+      <div style={s.scroll}>
+        <div style={{ background: C.primary, borderRadius: 16, padding: "16px 18px", marginBottom: 14, color: C.white }}>
+          <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.8, marginBottom: 10, letterSpacing: "0.5px" }}>MY PORTFOLIO</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
+            <div>
+              <div style={{ fontSize: 32, fontWeight: 700, lineHeight: 1 }}>{publishedCount}</div>
+              <div style={{ fontSize: 11, opacity: 0.8, marginTop: 3 }}>총 발행 글</div>
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 22, fontWeight: 700 }}>{logs.length}</div>
+              <div style={{ fontSize: 11, opacity: 0.8 }}>총 기록</div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 22, fontWeight: 700 }}>{series.length}</div>
+              <div style={{ fontSize: 11, opacity: 0.8 }}>진행 중 시리즈</div>
+            </div>
+          </div>
+        </div>
+
+        {seriesWithCount.length > 0 && (
+          <>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.textHint, letterSpacing: "0.5px", marginBottom: 8, textTransform: "uppercase" }}>진행 중 시리즈</div>
+            {seriesWithCount.map(ser => (
+              <div key={ser.id} style={{ ...s.card, marginBottom: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <span style={{ fontSize: 10, fontWeight: 600, background: ser.color, color: ser.text_color, padding: "2px 7px", borderRadius: 4, display: "inline-block", marginBottom: 5 }}>시리즈</span>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{ser.name}</div>
+                  </div>
+                  <span style={{ fontSize: 12, color: C.textHint, fontWeight: 500 }}>{ser.count}/{ser.goal}편</span>
+                </div>
+                <ProgressBar value={ser.count} max={ser.goal} color={ser.text_color} />
+                {ser.count >= ser.goal - 1 && (
+                  <div style={{ fontSize: 10, color: C.amber, fontWeight: 600, marginTop: 6 }}>✦ {ser.goal}편 완성 시 전자책 묶기 가능해요</div>
+                )}
+              </div>
+            ))}
+          </>
+        )}
+
+        <div style={{ fontSize: 11, fontWeight: 600, color: C.textHint, letterSpacing: "0.5px", margin: "14px 0 8px", textTransform: "uppercase" }}>최근 기록</div>
+        {recentLogs.length === 0 && (
+          <div style={{ textAlign: "center", padding: "32px 0", color: C.textHint, fontSize: 13 }}>
+            아직 기록이 없어요.<br />+ 버튼으로 첫 번째 기록을 남겨보세요!
+          </div>
+        )}
+        {recentLogs.map(log => {
+          const ser = series.find(s => s.id === log.series_id);
+          return (
+            <div key={log.id} style={s.card} onClick={() => navigate("detail", { log })}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>
+                <span style={s.tag(log.tag)}>{log.tag}</span>
+                {ser && <span style={{ fontSize: 9, color: C.textHint, background: C.bg, padding: "1px 6px", borderRadius: 4, fontWeight: 500 }}>{ser.name}</span>}
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 4, lineHeight: 1.4 }}>{log.title}</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontSize: 11, color: C.textHint }}>{formatDate(log.created_at)} · {log.source || ""}</span>
+                {log.published
+                  ? <span style={{ fontSize: 10, color: C.green, fontWeight: 600, background: C.greenLight, padding: "2px 7px", borderRadius: 4 }}>발행 완료</span>
+                  : <span style={{ fontSize: 10, color: C.primary, fontWeight: 500, background: C.primaryLight, padding: "2px 7px", borderRadius: 4 }}>미발행</span>}
+              </div>
+            </div>
+          );
+        })}
+        <div style={{ height: 70 }} />
+      </div>
+
+      <button onClick={() => navigate("new")} style={{ position: "absolute", bottom: 76, right: 20, width: 52, height: 52, background: C.primary, border: "none", borderRadius: "50%", cursor: "pointer", fontSize: 26, color: C.white, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10 }}>＋</button>
+      <TabBar active="home" navigate={navigate} />
+    </div>
+  );
+}
+
+function PortfolioScreen({ logs, series, navigate }) {
+  const publishedLogs = logs.filter(l => l.published);
+  const publishRate = logs.length > 0 ? Math.round((publishedLogs.length / logs.length) * 100) : 0;
+  const seriesWithCount = series.map(ser => ({
+    ...ser,
+    count: logs.filter(l => l.series_id === ser.id).length,
+  }));
+
+  return (
+    <div style={s.phone}>
+      <StatusBar />
+      <div style={{ ...s.appBar, justifyContent: "space-between" }}>
+        <span style={{ fontSize: 18, fontWeight: 700, color: C.text }}>포트폴리오</span>
+        <span style={{ fontSize: 12, color: C.primary, fontWeight: 600, cursor: "pointer" }}>공유 링크</span>
+      </div>
+      <div style={s.scroll}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          {[
+            { label: "총 발행", value: `${publishedLogs.length}편`, color: C.primary },
+            { label: "총 기록", value: `${logs.length}건`, color: C.textSub },
+            { label: "발행률", value: `${publishRate}%`, color: C.green },
+          ].map(m => (
+            <div key={m.label} style={{ flex: 1, background: C.white, borderRadius: 12, padding: "12px 10px", border: `0.5px solid ${C.border}`, textAlign: "center" }}>
+              <div style={{ fontSize: 20, fontWeight: 700, color: m.color }}>{m.value}</div>
+              <div style={{ fontSize: 10, color: C.textHint, marginTop: 2 }}>{m.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {seriesWithCount.length > 0 && (
+          <>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.textHint, letterSpacing: "0.5px", marginBottom: 8, textTransform: "uppercase" }}>시리즈 현황</div>
+            {seriesWithCount.map(ser => (
+              <div key={ser.id} style={{ ...s.card }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{ser.name}</div>
+                  <span style={{ fontSize: 11, color: C.textHint }}>{ser.count}/{ser.goal}편</span>
+                </div>
+                <ProgressBar value={ser.count} max={ser.goal} />
+                {ser.count >= ser.goal - 1 && (
+                  <div style={{ marginTop: 8, background: C.amberLight, borderRadius: 8, padding: "8px 10px", fontSize: 11, color: C.amber, fontWeight: 500 }}>
+                    ✦ 1편만 더 쓰면 전자책으로 묶을 수 있어요!
+                  </div>
+                )}
+              </div>
+            ))}
+          </>
+        )}
+
+        <div style={{ fontSize: 11, fontWeight: 600, color: C.textHint, letterSpacing: "0.5px", margin: "14px 0 8px", textTransform: "uppercase" }}>발행 이력</div>
+        {publishedLogs.length === 0 && (
+          <div style={{ textAlign: "center", padding: "24px 0", color: C.textHint, fontSize: 13 }}>아직 발행된 글이 없어요.</div>
+        )}
+        {publishedLogs.map(log => (
+          <div key={log.id} style={{ ...s.card, display: "flex", justifyContent: "space-between", alignItems: "center" }} onClick={() => navigate("detail", { log })}>
+            <div style={{ flex: 1 }}>
+              <span style={s.tag(log.tag)}>{log.tag}</span>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.text, lineHeight: 1.4 }}>{log.title}</div>
+              <div style={{ fontSize: 11, color: C.textHint, marginTop: 3 }}>{formatDate(log.created_at)} · 브런치</div>
+            </div>
+            <span style={{ fontSize: 18, marginLeft: 8, color: C.textHint }}>↗</span>
+          </div>
+        ))}
+        <div style={{ height: 20 }} />
+      </div>
+      <TabBar active="portfolio" navigate={navigate} />
+    </div>
+  );
+}
+
+function NewScreen({ series, navigate, onSave }) {
   const [title, setTitle] = useState("");
+  const [source, setSource] = useState("");
   const [points, setPoints] = useState(["", "", ""]);
   const [memo, setMemo] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
+  const [referenceUrl, setReferenceUrl] = useState("");
   const [tag, setTag] = useState("마케팅");
-  const [seriesId, setSeriesId] = useState(1);
+  const [seriesId, setSeriesId] = useState(series[0]?.id || null);
   const [showVoice, setShowVoice] = useState(false);
   const [autoFilled, setAutoFilled] = useState(false);
+  const [showExtra, setShowExtra] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const imageFileRef = useRef(null);
   const tags = ["마케팅", "독서", "개발", "디자인"];
 
   const handleVoiceDone = ({ points: p, memo: m }) => {
@@ -412,17 +429,52 @@ function NewScreen({ navigate }) {
     setShowVoice(false);
   };
 
+  const handleImageFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const url = await uploadImage(file);
+      setImageUrl(url);
+    } catch (err) {
+      alert("이미지 업로드 실패: " + err.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!title.trim()) { alert("제목을 입력해주세요."); return; }
+    setSaving(true);
+    try {
+      await onSave({
+        title: title.trim(),
+        source: source.trim() || null,
+        points: points.filter(p => p.trim()),
+        memo: memo.trim() || null,
+        image_url: imageUrl.trim() || null,
+        reference_url: referenceUrl.trim() || null,
+        tag,
+        series_id: seriesId || null,
+        published: false,
+      });
+      navigate("home");
+    } catch (err) {
+      alert("저장 실패: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div style={s.phone}>
       <StatusBar />
       <AppBar
         left={<IconBtn icon="✕" onClick={() => navigate("home")} />}
         title="새 기록"
-        right={<span onClick={() => navigate("home")} style={{ fontSize: 14, color: C.primary, fontWeight: 600, cursor: "pointer" }}>저장</span>}
+        right={null}
       />
       <div style={s.scroll}>
-
-        {/* 음성 자동 기록 배너 */}
         {!showVoice && !autoFilled && (
           <div style={{ background: C.primaryLight, borderRadius: 14, padding: "12px 14px", marginBottom: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>
@@ -432,9 +484,7 @@ function NewScreen({ navigate }) {
             <button onClick={() => setShowVoice(true)} style={{ background: C.primary, color: C.white, border: "none", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>시작하기</button>
           </div>
         )}
-
         {showVoice && <VoicePanel onClose={() => setShowVoice(false)} onDone={handleVoiceDone} />}
-
         {autoFilled && (
           <div style={{ background: C.greenLight, borderRadius: 10, padding: "8px 12px", marginBottom: 12, fontSize: 11, color: C.green, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>✓ AI가 핵심 포인트와 메모를 자동으로 채웠어요</span>
@@ -449,11 +499,11 @@ function NewScreen({ navigate }) {
         <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
           <div style={{ flex: 1 }}>
             <label style={s.label}>날짜</label>
-            <input style={s.input} defaultValue="2026.05.23" />
+            <input style={s.input} defaultValue={new Date().toLocaleDateString("ko-KR")} readOnly />
           </div>
           <div style={{ flex: 1 }}>
             <label style={s.label}>출처</label>
-            <input style={s.input} placeholder="인프런, 유데미..." />
+            <input style={s.input} value={source} onChange={e => setSource(e.target.value)} placeholder="인프런, 유데미..." />
           </div>
         </div>
         <div style={{ marginBottom: 14 }}>
@@ -467,10 +517,9 @@ function NewScreen({ navigate }) {
         <div style={{ marginBottom: 14 }}>
           <label style={s.label}>시리즈에 추가</label>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {SERIES.map(ser => (
+            {series.map(ser => (
               <button key={ser.id} onClick={() => setSeriesId(ser.id)} style={{ background: seriesId === ser.id ? C.primaryLight : C.white, border: `1px solid ${seriesId === ser.id ? C.primary : C.border}`, borderRadius: 10, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
                 <span style={{ fontSize: 13, color: seriesId === ser.id ? C.primaryDark : C.text, fontWeight: seriesId === ser.id ? 600 : 400 }}>{ser.name}</span>
-                <span style={{ fontSize: 11, color: C.textHint }}>{ser.count}/{ser.goal}편</span>
               </button>
             ))}
             <button style={{ background: C.white, border: `1px dashed ${C.border}`, borderRadius: 10, padding: "10px 14px", fontSize: 13, color: C.textHint, cursor: "pointer" }}>+ 새 시리즈 만들기</button>
@@ -488,37 +537,87 @@ function NewScreen({ navigate }) {
             </div>
           ))}
         </div>
-        <div style={{ marginBottom: 20 }}>
+        <div style={{ marginBottom: 14 }}>
           <label style={s.label}>
             느낀 점 / 콘텐츠 각도
             {autoFilled && <span style={{ fontSize: 10, color: C.green, fontWeight: 600, marginLeft: 6 }}>✦ AI 자동완성</span>}
           </label>
           <textarea style={{ ...s.input, height: 80, resize: "none", lineHeight: 1.6, background: autoFilled && memo ? C.primaryLight : C.white }} value={memo} onChange={e => setMemo(e.target.value)} placeholder="독자에게 어떻게 풀어낼지, 어떤 사례와 연결할지..." />
         </div>
-        <button style={s.btnPrimary} onClick={() => navigate("home")}>저장하기</button>
+
+        <button onClick={() => setShowExtra(v => !v)} style={{ width: "100%", background: "none", border: `1px dashed ${C.border}`, borderRadius: 10, padding: "10px 14px", fontSize: 13, color: C.textHint, cursor: "pointer", marginBottom: showExtra ? 10 : 4, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+          <span>{showExtra ? "▲" : "▼"}</span>
+          <span>이미지 · 링크 추가 (선택)</span>
+        </button>
+        {showExtra && (
+          <>
+            <div style={{ marginBottom: 14 }}>
+              <label style={s.label}>이미지</label>
+              <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                <input style={{ ...s.input, flex: 1, marginBottom: 0 }} value={imageUrl} onChange={e => setImageUrl(e.target.value)} placeholder="https://... 이미지 URL" />
+                <button onClick={() => imageFileRef.current?.click()} disabled={uploading} style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10, padding: "0 12px", fontSize: 12, color: C.textSub, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}>
+                  {uploading ? "업로드 중..." : "📁 파일"}
+                </button>
+                <input ref={imageFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={handleImageFile} />
+              </div>
+              {imageUrl && <img src={imageUrl} alt="미리보기" style={{ width: "100%", borderRadius: 8, maxHeight: 150, objectFit: "cover" }} onError={() => setImageUrl("")} />}
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <label style={s.label}>관련 링크 / URL</label>
+              <input style={s.input} value={referenceUrl} onChange={e => setReferenceUrl(e.target.value)} placeholder="참고 자료나 출처 URL" />
+            </div>
+          </>
+        )}
+      </div>
+      <div style={{ padding: "10px 20px 16px", background: C.white, borderTop: `0.5px solid ${C.border}`, flexShrink: 0 }}>
+        <button style={{ ...s.btnPrimary, opacity: saving ? 0.6 : 1 }} onClick={handleSave} disabled={saving}>
+          {saving ? "저장 중..." : "저장하기"}
+        </button>
       </div>
     </div>
   );
 }
 
-function DetailScreen({ navigate, log }) {
-  const ser = SERIES.find(s => s.id === log.seriesId);
+function DetailScreen({ navigate, log, series, onDelete }) {
+  const ser = series.find(s => s.id === log.series_id);
+  const serCount = ser ? 0 : 0;
+
+  const handleDelete = async () => {
+    if (!confirm("이 기록을 삭제할까요?")) return;
+    await onDelete(log.id);
+    navigate("home");
+  };
+
   return (
     <div style={s.phone}>
       <StatusBar />
-      <AppBar left={<IconBtn icon="←" onClick={() => navigate("home")} />} title="기록 상세" right={<IconBtn icon="✎" color={C.textSub} />} />
+      <AppBar
+        left={<IconBtn icon="←" onClick={() => navigate("home")} />}
+        title="기록 상세"
+        right={<IconBtn icon="🗑" onClick={handleDelete} color={C.textHint} />}
+      />
       <div style={s.scroll}>
         <div style={{ ...s.card, cursor: "default", marginBottom: 14 }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
             <span style={s.tag(log.tag)}>{log.tag}</span>
-            {ser && <span style={{ fontSize: 9, color: C.textHint, background: C.bg, padding: "1px 6px", borderRadius: 4, fontWeight: 500 }}>{ser.name} · {ser.count}/{ser.goal}편</span>}
+            {ser && <span style={{ fontSize: 9, color: C.textHint, background: C.bg, padding: "1px 6px", borderRadius: 4, fontWeight: 500 }}>{ser.name}</span>}
           </div>
           <div style={{ fontSize: 17, fontWeight: 700, color: C.text, marginBottom: 5, lineHeight: 1.4 }}>{log.title}</div>
-          <div style={{ fontSize: 12, color: C.textHint }}>{log.date} · {log.source}</div>
+          <div style={{ fontSize: 12, color: C.textHint }}>{formatDate(log.created_at)} · {log.source || ""}</div>
+          {log.reference_url && (
+            <a href={log.reference_url} target="_blank" rel="noreferrer" style={{ display: "block", marginTop: 10, fontSize: 12, color: C.primary, textDecoration: "underline" }}>
+              참고 링크 보기
+            </a>
+          )}
         </div>
+        {log.image_url && (
+          <div style={{ ...s.card, padding: 0, overflow: "hidden", marginBottom: 14 }}>
+            <img src={log.image_url} alt="대표 이미지" style={{ width: "100%", display: "block", objectFit: "cover", maxHeight: 200 }} />
+          </div>
+        )}
 
         <div style={{ fontSize: 11, fontWeight: 600, color: C.textHint, letterSpacing: "0.5px", marginBottom: 10, textTransform: "uppercase" }}>핵심 포인트</div>
-        {log.points.map((p, i) => (
+        {(log.points || []).map((p, i) => (
           <div key={i} style={{ display: "flex", gap: 10, marginBottom: 10, alignItems: "flex-start" }}>
             <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.primary, marginTop: 5, flexShrink: 0 }} />
             <span style={{ fontSize: 14, color: C.text, lineHeight: 1.6 }}>{p}</span>
@@ -526,7 +625,7 @@ function DetailScreen({ navigate, log }) {
         ))}
 
         <div style={{ fontSize: 11, fontWeight: 600, color: C.textHint, letterSpacing: "0.5px", margin: "16px 0 8px", textTransform: "uppercase" }}>콘텐츠 각도 메모</div>
-        <div style={{ fontSize: 14, color: C.textSub, lineHeight: 1.7, marginBottom: 24, background: C.white, borderRadius: 12, padding: "12px 14px", border: `0.5px solid ${C.border}` }}>{log.memo}</div>
+        <div style={{ fontSize: 14, color: C.textSub, lineHeight: 1.7, marginBottom: 24, background: C.white, borderRadius: 12, padding: "12px 14px", border: `0.5px solid ${C.border}` }}>{log.memo || "메모 없음"}</div>
 
         <button style={s.btnPrimary} onClick={() => navigate("draft", { log })}>
           ✦ AI로 브런치 초안 생성
@@ -537,21 +636,57 @@ function DetailScreen({ navigate, log }) {
   );
 }
 
-function DraftScreen({ navigate, log }) {
+function DraftScreen({ navigate, log, series, onPublish }) {
   const [generating, setGenerating] = useState(true);
-  const [editTitle, setEditTitle] = useState(AI_DRAFT.title);
-  const [editBody, setEditBody] = useState(AI_DRAFT.body);
+  const [editTitle, setEditTitle] = useState("");
+  const [editBody, setEditBody] = useState("");
   const [platform, setPlatform] = useState("브런치");
-  const [series, setSeries] = useState("그로스 해킹 A-Z");
+  const [seriesName, setSeriesName] = useState("");
   const [progress, setProgress] = useState(0);
   const [tab, setTab] = useState("edit");
+  const [publishing, setPublishing] = useState(false);
+
+  const ser = series.find(s => s.id === log.series_id);
 
   useEffect(() => {
+    let p = 0;
     const iv = setInterval(() => {
-      setProgress(p => { if (p >= 100) { clearInterval(iv); setGenerating(false); return 100; } return p + 4; });
+      p += 3;
+      setProgress(Math.min(p, 90));
+      if (p >= 90) clearInterval(iv);
     }, 60);
+
+    generateDraft(log)
+      .then(result => {
+        clearInterval(iv);
+        setProgress(100);
+        setEditTitle(result.title || log.title);
+        setEditBody(result.body || "");
+        setGenerating(false);
+      })
+      .catch(() => {
+        clearInterval(iv);
+        setProgress(100);
+        setEditTitle(log.title);
+        setEditBody(`${log.title}에 대해 배운 내용을 정리했습니다.\n\n${(log.points || []).join("\n\n")}\n\n${log.memo || ""}`);
+        setGenerating(false);
+      });
+
+    setSeriesName(ser?.name || "없음");
     return () => clearInterval(iv);
   }, []);
+
+  const handlePublish = async () => {
+    setPublishing(true);
+    try {
+      await onPublish(log.id);
+      navigate("success", { log: { ...log, published: true }, draftTitle: editTitle });
+    } catch (err) {
+      alert("발행 실패: " + err.message);
+    } finally {
+      setPublishing(false);
+    }
+  };
 
   if (generating) {
     return (
@@ -585,12 +720,10 @@ function DraftScreen({ navigate, log }) {
         left={<IconBtn icon="←" onClick={() => tab === "preview" ? setTab("edit") : navigate("detail", { log })} />}
         title={tab === "edit" ? "초안 편집" : "미리보기 · 검토"}
         right={tab === "edit"
-          ? <span style={{ fontSize: 12, color: C.primary, fontWeight: 600, cursor: "pointer" }}>재생성</span>
+          ? <span style={{ fontSize: 12, color: C.primary, fontWeight: 600, cursor: "pointer" }} onClick={() => { setGenerating(true); setProgress(0); }}>재생성</span>
           : <span onClick={() => setTab("edit")} style={{ fontSize: 12, color: C.textSub, cursor: "pointer" }}>편집</span>
         }
       />
-
-      {/* 탭 스위처 */}
       <div style={{ display: "flex", background: C.white, borderBottom: `0.5px solid ${C.border}`, flexShrink: 0 }}>
         {[{ key: "edit", label: "✎ 편집" }, { key: "preview", label: "◎ 미리보기" }].map(t => (
           <button key={t.key} onClick={() => setTab(t.key)} style={{
@@ -629,8 +762,8 @@ function DraftScreen({ navigate, log }) {
               </div>
               <div style={{ flex: 1 }}>
                 <label style={s.label}>시리즈</label>
-                <select style={{ ...s.input }} value={series} onChange={e => setSeries(e.target.value)}>
-                  <option>그로스 해킹 A-Z</option>
+                <select style={{ ...s.input }} value={seriesName} onChange={e => setSeriesName(e.target.value)}>
+                  <option>{ser?.name || "없음"}</option>
                   <option>없음</option>
                 </select>
               </div>
@@ -639,27 +772,34 @@ function DraftScreen({ navigate, log }) {
           </>
         ) : (
           <>
-            {/* 브런치 스타일 미리보기 */}
             <div style={{ background: C.white, borderRadius: 14, padding: "18px 16px", marginBottom: 12, border: `0.5px solid ${C.border}` }}>
               <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10 }}>
-                <span style={s.tag("마케팅")}>마케팅</span>
-                <span style={{ fontSize: 10, color: C.textHint }}>{series}</span>
+                <span style={s.tag(log.tag)}>{log.tag}</span>
+                <span style={{ fontSize: 10, color: C.textHint }}>{seriesName}</span>
               </div>
               <div style={{ fontSize: 19, fontWeight: 700, color: C.text, lineHeight: 1.45, marginBottom: 14 }}>{editTitle}</div>
+              {log.image_url && (
+                <div style={{ borderRadius: 10, overflow: "hidden", marginBottom: 14 }}>
+                  <img src={log.image_url} alt="대표 이미지" style={{ width: "100%", display: "block", objectFit: "cover", maxHeight: 210 }} />
+                </div>
+              )}
               <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 14, borderBottom: `0.5px solid ${C.border}`, marginBottom: 16 }}>
                 <div style={{ width: 34, height: 34, borderRadius: "50%", background: C.primaryLight, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: C.primaryDark, flexShrink: 0 }}>이</div>
                 <div>
                   <div style={{ fontSize: 12, fontWeight: 600, color: C.text }}>이유진</div>
-                  <div style={{ fontSize: 11, color: C.textHint }}>2026.05.23 · {platform}</div>
+                  <div style={{ fontSize: 11, color: C.textHint }}>{new Date().toLocaleDateString("ko-KR")} · {platform}</div>
                 </div>
               </div>
               <div style={{ fontSize: 14, color: C.text, lineHeight: 1.9 }}>
                 {editBody.split("\n").map((line, i) =>
-                  line.trim()
-                    ? <p key={i} style={{ margin: "0 0 14px 0" }}>{line}</p>
-                    : <br key={i} />
+                  line.trim() ? <p key={i} style={{ margin: "0 0 14px 0" }}>{line}</p> : <br key={i} />
                 )}
               </div>
+              {log.reference_url && (
+                <div style={{ marginTop: 16, fontSize: 13, color: C.primary }}>
+                  참고 링크: <a href={log.reference_url} target="_blank" rel="noreferrer" style={{ color: C.primary, textDecoration: "underline" }}>{log.reference_url}</a>
+                </div>
+              )}
               <div style={{ display: "flex", gap: 16, paddingTop: 14, borderTop: `0.5px solid ${C.border}`, marginTop: 8 }}>
                 <span style={{ fontSize: 12, color: C.textHint }}>♡ 좋아요</span>
                 <span style={{ fontSize: 12, color: C.textHint }}>✎ 댓글</span>
@@ -667,7 +807,6 @@ function DraftScreen({ navigate, log }) {
               </div>
             </div>
 
-            {/* 발행 전 체크리스트 */}
             <div style={{ background: allClear ? C.greenLight : C.amberLight, borderRadius: 12, padding: "12px 14px", marginBottom: 12 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: allClear ? C.green : C.amber, marginBottom: 10 }}>
                 {allClear ? "✓ 발행 준비 완료" : "! 발행 전 확인해주세요"}
@@ -683,9 +822,10 @@ function DraftScreen({ navigate, log }) {
             </div>
 
             <button
-              style={{ ...s.btnPrimary, opacity: allClear ? 1 : 0.5 }}
-              onClick={() => allClear && navigate("success")}
-            >{platform}에 발행하기 →</button>
+              style={{ ...s.btnPrimary, opacity: (allClear && !publishing) ? 1 : 0.5 }}
+              onClick={handlePublish}
+              disabled={!allClear || publishing}
+            >{publishing ? "발행 중..." : `${platform}에 발행하기 →`}</button>
             <button style={s.btnOutline} onClick={() => setTab("edit")}>수정하러 돌아가기</button>
           </>
         )}
@@ -694,7 +834,10 @@ function DraftScreen({ navigate, log }) {
   );
 }
 
-function SuccessScreen({ navigate }) {
+function SuccessScreen({ navigate, log, draftTitle, series }) {
+  const ser = series.find(s => s.id === log?.series_id);
+  const serCount = 0;
+
   return (
     <div style={s.phone}>
       <StatusBar />
@@ -710,15 +853,16 @@ function SuccessScreen({ navigate }) {
 
         <div style={{ width: "100%", background: C.white, borderRadius: 14, padding: "14px 16px", border: `0.5px solid ${C.border}`, marginBottom: 12 }}>
           <div style={{ fontSize: 11, color: C.textHint, marginBottom: 5 }}>발행된 글</div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 3 }}>그로스 해킹의 시작: 퍼널을 제대로 읽는 법</div>
-          <div style={{ fontSize: 12, color: C.primary }}>brunch.co.kr/@me · 그로스 해킹 A-Z 시리즈</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 3 }}>{draftTitle || log?.title}</div>
+          {ser && <div style={{ fontSize: 12, color: C.primary }}>brunch.co.kr/@me · {ser.name} 시리즈</div>}
         </div>
 
-        <div style={{ width: "100%", background: C.amberLight, borderRadius: 14, padding: "14px 16px", marginBottom: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: C.amber, marginBottom: 8 }}>✦ 그로스 해킹 A-Z 시리즈 — 4/5편</div>
-          <ProgressBar value={4} max={5} color={C.amber} />
-          <div style={{ fontSize: 11, color: C.amber, marginTop: 8 }}>1편만 더 발행하면 전자책으로 묶을 수 있어요!</div>
-        </div>
+        {ser && (
+          <div style={{ width: "100%", background: C.amberLight, borderRadius: 14, padding: "14px 16px", marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: C.amber, marginBottom: 8 }}>✦ {ser.name} 시리즈</div>
+            <div style={{ fontSize: 11, color: C.amber }}>계속 발행하면 전자책으로 묶을 수 있어요!</div>
+          </div>
+        )}
 
         <button style={{ ...s.btnOutline, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 8 }}>
           ↗ 브런치에서 보기
@@ -733,16 +877,74 @@ function SuccessScreen({ navigate }) {
 export default function App() {
   const [screen, setScreen] = useState("home");
   const [params, setParams] = useState({});
+  const [logs, setLogs] = useState([]);
+  const [series, setSeries] = useState([]);
+  const [loading, setLoading] = useState(true);
 
   const navigate = (to, p = {}) => { setParams(p); setScreen(to); };
 
+  useEffect(() => { loadData(); }, []);
+
+  async function loadData() {
+    setLoading(true);
+    try {
+      const [logsRes, seriesRes] = await Promise.all([
+        supabase.from("logs").select("*").order("created_at", { ascending: false }),
+        supabase.from("series").select("*").order("created_at"),
+      ]);
+      if (logsRes.error) throw logsRes.error;
+      if (seriesRes.error) throw seriesRes.error;
+      setLogs(logsRes.data || []);
+      setSeries(seriesRes.data || []);
+    } catch (e) {
+      console.warn("Supabase 연결 실패, 샘플 데이터 사용:", e.message);
+      setSeries([
+        { id: "demo-1", name: "그로스 해킹 A-Z", goal: 5, color: "#EEEDFE", text_color: "#3C3489" },
+        { id: "demo-2", name: "린 스타트업 독서", goal: 4, color: "#E1F5EE", text_color: "#085041" },
+      ]);
+      setLogs([
+        { id: "demo-log-1", tag: "마케팅", title: "그로스 해킹 — 퍼널 분석 기초", source: "인프런", created_at: new Date(Date.now() - 86400000).toISOString(), published: true, series_id: "demo-1", points: ["AARRR 퍼널의 각 단계별 역할과 지표 설정 방법", "활성화율이 리텐션보다 먼저 해결되어야 하는 이유", "코호트 분석으로 이탈 구간을 찾는 실전 방법"], memo: "클라이언트 제안서에 바로 쓸 수 있는 내용." },
+        { id: "demo-log-2", tag: "독서", title: "린 스타트업 — 3장 검증된 학습", source: "독서 모임", created_at: new Date(Date.now() - 3 * 86400000).toISOString(), published: false, series_id: "demo-2", points: ["MVP는 최소 기능이 아니라 최소 학습 도구", "허영 지표 vs 실행 지표의 차이", "피벗의 기준: 전략 변경이지 실패가 아님"], memo: "독자들이 공감할 만한 창업 착각 시리즈로 이어갈 수 있겠다." },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSave(logData) {
+    const { data, error } = await supabase.from("logs").insert([logData]).select();
+    if (error) throw error;
+    setLogs(prev => [data[0], ...prev]);
+  }
+
+  async function handleDelete(logId) {
+    const { error } = await supabase.from("logs").delete().eq("id", logId);
+    if (error) throw error;
+    setLogs(prev => prev.filter(l => l.id !== logId));
+  }
+
+  async function handlePublish(logId) {
+    const { error } = await supabase.from("logs").update({ published: true }).eq("id", logId);
+    if (error) throw error;
+    setLogs(prev => prev.map(l => l.id === logId ? { ...l, published: true } : l));
+  }
+
+  if (loading) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", gap: 12 }}>
+        <div style={{ fontSize: 28 }}>✦</div>
+        <div style={{ fontSize: 14, color: "#555" }}>LearnLog 불러오는 중...</div>
+      </div>
+    );
+  }
+
   const screenMap = {
-    home: <HomeScreen navigate={navigate} />,
-    portfolio: <PortfolioScreen navigate={navigate} />,
-    new: <NewScreen navigate={navigate} />,
-    detail: <DetailScreen navigate={navigate} log={params.log || LOGS[0]} />,
-    draft: <DraftScreen navigate={navigate} log={params.log || LOGS[0]} />,
-    success: <SuccessScreen navigate={navigate} />,
+    home: <HomeScreen logs={logs} series={series} navigate={navigate} />,
+    portfolio: <PortfolioScreen logs={logs} series={series} navigate={navigate} />,
+    new: <NewScreen series={series} navigate={navigate} onSave={handleSave} />,
+    detail: <DetailScreen navigate={navigate} log={params.log || logs[0] || {}} series={series} onDelete={handleDelete} />,
+    draft: <DraftScreen navigate={navigate} log={params.log || logs[0] || {}} series={series} onPublish={handlePublish} />,
+    success: <SuccessScreen navigate={navigate} log={params.log} draftTitle={params.draftTitle} series={series} />,
   };
 
   const allScreens = [
@@ -757,7 +959,7 @@ export default function App() {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "20px 0" }}>
       <div style={{ fontSize: 12, color: "#999", marginBottom: 12, letterSpacing: "0.5px" }}>
-        LearnLog — 인터랙티브 프로토타입 v1.1 (크리에이터 타겟)
+        LearnLog — 인터랙티브 프로토타입 v2.0 (크리에이터 타겟)
       </div>
       <div style={{ border: "8px solid #222", borderRadius: 40, overflow: "hidden", background: "#222" }}>
         {screenMap[screen] || screenMap.home}
