@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { supabase, uploadImage } from "./lib/supabase";
+import { supabase, isConfigured, uploadImage } from "./lib/supabase";
 import { summarizeText, generateDraft } from "./lib/ai";
 
 const C = {
@@ -887,6 +887,11 @@ export default function App() {
 
   async function loadData() {
     setLoading(true);
+    if (!isConfigured) {
+      loadDemoData();
+      setLoading(false);
+      return;
+    }
     try {
       const [logsRes, seriesRes] = await Promise.all([
         supabase.from("logs").select("*").order("created_at", { ascending: false }),
@@ -898,32 +903,49 @@ export default function App() {
       setSeries(seriesRes.data || []);
     } catch (e) {
       console.warn("Supabase 연결 실패, 샘플 데이터 사용:", e.message);
-      setSeries([
-        { id: "demo-1", name: "그로스 해킹 A-Z", goal: 5, color: "#EEEDFE", text_color: "#3C3489" },
-        { id: "demo-2", name: "린 스타트업 독서", goal: 4, color: "#E1F5EE", text_color: "#085041" },
-      ]);
-      setLogs([
-        { id: "demo-log-1", tag: "마케팅", title: "그로스 해킹 — 퍼널 분석 기초", source: "인프런", created_at: new Date(Date.now() - 86400000).toISOString(), published: true, series_id: "demo-1", points: ["AARRR 퍼널의 각 단계별 역할과 지표 설정 방법", "활성화율이 리텐션보다 먼저 해결되어야 하는 이유", "코호트 분석으로 이탈 구간을 찾는 실전 방법"], memo: "클라이언트 제안서에 바로 쓸 수 있는 내용." },
-        { id: "demo-log-2", tag: "독서", title: "린 스타트업 — 3장 검증된 학습", source: "독서 모임", created_at: new Date(Date.now() - 3 * 86400000).toISOString(), published: false, series_id: "demo-2", points: ["MVP는 최소 기능이 아니라 최소 학습 도구", "허영 지표 vs 실행 지표의 차이", "피벗의 기준: 전략 변경이지 실패가 아님"], memo: "독자들이 공감할 만한 창업 착각 시리즈로 이어갈 수 있겠다." },
-      ]);
+      loadDemoData();
     } finally {
       setLoading(false);
     }
   }
 
+  function loadDemoData() {
+    setSeries([
+      { id: "demo-1", name: "그로스 해킹 A-Z", goal: 5, color: "#EEEDFE", text_color: "#3C3489" },
+      { id: "demo-2", name: "린 스타트업 독서", goal: 4, color: "#E1F5EE", text_color: "#085041" },
+    ]);
+    setLogs([
+      { id: "demo-log-1", tag: "마케팅", title: "그로스 해킹 — 퍼널 분석 기초", source: "인프런", created_at: new Date(Date.now() - 86400000).toISOString(), published: true, series_id: "demo-1", points: ["AARRR 퍼널의 각 단계별 역할과 지표 설정 방법", "활성화율이 리텐션보다 먼저 해결되어야 하는 이유", "코호트 분석으로 이탈 구간을 찾는 실전 방법"], memo: "클라이언트 제안서에 바로 쓸 수 있는 내용." },
+      { id: "demo-log-2", tag: "독서", title: "린 스타트업 — 3장 검증된 학습", source: "독서 모임", created_at: new Date(Date.now() - 3 * 86400000).toISOString(), published: false, series_id: "demo-2", points: ["MVP는 최소 기능이 아니라 최소 학습 도구", "허영 지표 vs 실행 지표의 차이", "피벗의 기준: 전략 변경이지 실패가 아님"], memo: "독자들이 공감할 만한 창업 착각 시리즈로 이어갈 수 있겠다." },
+    ]);
+  }
+
   async function handleSave(logData) {
+    if (!isConfigured) {
+      const newLog = { ...logData, id: `local-${Date.now()}`, created_at: new Date().toISOString() };
+      setLogs(prev => [newLog, ...prev]);
+      return;
+    }
     const { data, error } = await supabase.from("logs").insert([logData]).select();
     if (error) throw error;
     setLogs(prev => [data[0], ...prev]);
   }
 
   async function handleDelete(logId) {
+    if (!isConfigured) {
+      setLogs(prev => prev.filter(l => l.id !== logId));
+      return;
+    }
     const { error } = await supabase.from("logs").delete().eq("id", logId);
     if (error) throw error;
     setLogs(prev => prev.filter(l => l.id !== logId));
   }
 
   async function handlePublish(logId) {
+    if (!isConfigured) {
+      setLogs(prev => prev.map(l => l.id === logId ? { ...l, published: true } : l));
+      return;
+    }
     const { error } = await supabase.from("logs").update({ published: true }).eq("id", logId);
     if (error) throw error;
     setLogs(prev => prev.map(l => l.id === logId ? { ...l, published: true } : l));
