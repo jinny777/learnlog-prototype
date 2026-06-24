@@ -113,6 +113,7 @@ function VoicePanel({ onClose, onDone }) {
   const recognitionRef = useRef(null);
   const finalRef = useRef("");
   const fileInputRef = useRef(null);
+  const isRecordingRef = useRef(false);
 
   useEffect(() => {
     if (phase !== "recording") return;
@@ -138,13 +139,24 @@ function VoicePanel({ onClose, onDone }) {
       }
       setTranscript(finalRef.current + interim);
     };
-    rec.onerror = () => setPhase("idle");
+    rec.onerror = (e) => {
+      if (e.error === "no-speech" || e.error === "aborted") return;
+      isRecordingRef.current = false;
+      setPhase("idle");
+    };
+    rec.onend = () => {
+      if (isRecordingRef.current) {
+        try { rec.start(); } catch {}
+      }
+    };
+    isRecordingRef.current = true;
     rec.start();
     setPhase("recording");
     setTranscript("");
   };
 
   const stopAndSummarize = () => {
+    isRecordingRef.current = false;
     if (recognitionRef.current) recognitionRef.current.stop();
     runSummarize(finalRef.current || transcript);
   };
@@ -227,7 +239,7 @@ function VoicePanel({ onClose, onDone }) {
       </div>
       <div style={{ display: "flex", gap: 8 }}>
         <button onClick={stopAndSummarize} style={{ flex: 2, background: C.primary, color: C.white, border: "none", borderRadius: 10, padding: "11px 0", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>완료 → AI 요약</button>
-        <button onClick={() => { if (recognitionRef.current) recognitionRef.current.stop(); onClose(); }} style={{ flex: 1, background: C.bg, color: C.textSub, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 0", fontSize: 13, cursor: "pointer" }}>취소</button>
+        <button onClick={() => { isRecordingRef.current = false; if (recognitionRef.current) recognitionRef.current.stop(); onClose(); }} style={{ flex: 1, background: C.bg, color: C.textSub, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 0", fontSize: 13, cursor: "pointer" }}>취소</button>
       </div>
     </div>
   );
