@@ -1,9 +1,7 @@
 import * as pdfjsLib from 'pdfjs-dist';
+import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url
-).href;
+pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
 
 export async function extractTextFromPdf(file) {
   const arrayBuffer = await file.arrayBuffer();
@@ -15,5 +13,7 @@ export async function extractTextFromPdf(file) {
     const content = await page.getTextContent();
     pageTexts.push(content.items.map(item => item.str).join(' '));
   }
-  return pageTexts.join('\n').trim();
+  const text = pageTexts.join('\n').trim();
+  if (!text) throw new Error('텍스트를 추출할 수 없습니다. 이미지 기반 PDF이거나 보호된 파일일 수 있어요.');
+  return text;
 }
