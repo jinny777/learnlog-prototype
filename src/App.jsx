@@ -73,7 +73,7 @@ function AppBar({ left, title, right }) {
 function TabBar({ active, navigate }) {
   const tabs = [
     { id: "home", label: "홈", icon: "⌂" },
-    { id: "recordings", label: "녹음", icon: "🎙" },
+    { id: "courses", label: "강의별", icon: "📚" },
     { id: "portfolio", label: "포트폴리오", icon: "◈" },
   ];
   return (
@@ -381,81 +381,132 @@ function HomeScreen({ logs, series, navigate }) {
   );
 }
 
-function RecordingsScreen({ logs, navigate }) {
-  // 강의/스터디 제목별로 그룹핑 (알파벳·가나다 순)
+function CoursesScreen({ logs, navigate }) {
+  const [expandedTitle, setExpandedTitle] = useState(null);
+
+  // 강의/스터디 제목별 그룹핑 — 최근 기록 순 정렬
   const grouped = {};
   logs.forEach(log => {
     const key = log.title || "제목 없음";
     if (!grouped[key]) grouped[key] = [];
     grouped[key].push(log);
   });
-  const titles = Object.keys(grouped).sort((a, b) => a.localeCompare(b, "ko"));
+  // 각 그룹의 최신 created_at 기준으로 정렬
+  const titles = Object.keys(grouped).sort((a, b) => {
+    const latestA = grouped[a][0]?.created_at || "";
+    const latestB = grouped[b][0]?.created_at || "";
+    return latestB.localeCompare(latestA);
+  });
 
   return (
     <div style={s.phone}>
       <StatusBar />
       <div style={{ ...s.appBar, justifyContent: "space-between" }}>
-        <span style={{ fontSize: 18, fontWeight: 700, color: C.text }}>녹음 목록</span>
-        <span style={{ fontSize: 11, color: C.textHint }}>{logs.filter(l => l.audio_url).length}개 파일</span>
+        <span style={{ fontSize: 18, fontWeight: 700, color: C.text }}>강의별 기록</span>
+        <span style={{ fontSize: 11, color: C.textHint }}>{titles.length}개 강의</span>
       </div>
       <div style={s.scroll}>
         {titles.length === 0 && (
           <div style={{ textAlign: "center", padding: "40px 0", color: C.textHint, fontSize: 13, lineHeight: 2 }}>
-            녹음된 강의가 없어요.<br />
-            + 버튼으로 녹음하며 기록해보세요.
+            아직 기록이 없어요.<br />+ 버튼으로 첫 기록을 남겨보세요.
           </div>
         )}
-        {titles.map(title => (
-          <div key={title} style={{ marginBottom: 18 }}>
-            {/* 제목 헤더 */}
-            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8, paddingBottom: 6, borderBottom: `1px solid ${C.border}` }}>
-              {title}
-              <span style={{ fontSize: 11, fontWeight: 400, color: C.textHint, marginLeft: 6 }}>{grouped[title].length}회</span>
-            </div>
-            {/* 해당 제목의 녹음 목록 */}
-            {grouped[title].map(log => (
-              <div key={log.id} style={{ background: C.white, borderRadius: 12, padding: "12px 14px", marginBottom: 8, border: `0.5px solid ${C.border}` }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: log.audio_url ? 8 : 4 }}>
-                  <span style={s.tag(log.tag)}>{log.tag}</span>
-                  <span style={{ fontSize: 11, color: C.textHint, marginLeft: "auto" }}>{formatDate(log.created_at)}</span>
-                  {log.source && <span style={{ fontSize: 11, color: C.textHint }}>· {log.source}</span>}
+        {titles.map(title => {
+          const sessions = grouped[title];
+          const isExpanded = expandedTitle === title;
+          const audioCount = sessions.filter(l => l.audio_url).length;
+          const tags = [...new Set(sessions.map(l => l.tag).filter(Boolean))];
+          const latestDate = sessions[0]?.created_at;
+
+          return (
+            <div key={title} style={{ marginBottom: 10 }}>
+              {/* 강의 요약 카드 */}
+              <div
+                onClick={() => setExpandedTitle(isExpanded ? null : title)}
+                style={{ background: C.white, borderRadius: 14, padding: "14px 16px", border: `0.5px solid ${isExpanded ? C.primary : C.border}`, cursor: "pointer" }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                  <div style={{ flex: 1, paddingRight: 8 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: C.text, lineHeight: 1.4, marginBottom: 5 }}>{title}</div>
+                    <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                      {tags.map(t => <span key={t} style={s.tag(t)}>{t}</span>)}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 16, color: isExpanded ? C.primary : C.textHint, flexShrink: 0 }}>
+                    {isExpanded ? "▲" : "▼"}
+                  </span>
                 </div>
-                {log.audio_url ? (
-                  <audio
-                    controls
-                    src={log.audio_url}
-                    style={{ width: "100%", height: 36, marginBottom: 8 }}
-                    onClick={e => e.stopPropagation()}
-                  />
-                ) : (
-                  <div style={{ fontSize: 11, color: C.textHint, fontStyle: "italic", marginBottom: 6, padding: "6px 0" }}>
-                    녹음 파일 없음
-                  </div>
-                )}
-                {(log.points || []).length > 0 && (
-                  <div style={{ fontSize: 12, color: C.textSub, lineHeight: 1.7 }}>
-                    {(log.points || []).slice(0, 2).map((p, i) => (
-                      <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
-                        <span style={{ color: C.primary, flexShrink: 0 }}>·</span>
-                        <span>{p}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <button
-                  onClick={() => navigate("detail", { log })}
-                  style={{ marginTop: 8, background: "none", border: "none", color: C.primary, fontSize: 12, cursor: "pointer", padding: 0, fontWeight: 600 }}
-                >
-                  상세 보기 →
-                </button>
+                <div style={{ display: "flex", gap: 12, fontSize: 11, color: C.textHint }}>
+                  <span>📋 {sessions.length}회 기록</span>
+                  {audioCount > 0 && <span>🎙 {audioCount}개 녹음</span>}
+                  <span style={{ marginLeft: "auto" }}>{formatDate(latestDate)}</span>
+                </div>
               </div>
-            ))}
-          </div>
-        ))}
+
+              {/* 펼쳐진 세션 목록 */}
+              {isExpanded && (
+                <div style={{ marginTop: 4, paddingLeft: 8, borderLeft: `2px solid ${C.primary}` }}>
+                  {sessions.map((log, idx) => (
+                    <div
+                      key={log.id}
+                      style={{ background: C.white, borderRadius: 10, padding: "12px 14px", marginBottom: 6, border: `0.5px solid ${C.border}` }}
+                    >
+                      {/* 세션 헤더 */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+                        <div style={{ width: 20, height: 20, borderRadius: "50%", background: C.primaryLight, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: C.primaryDark, flexShrink: 0 }}>
+                          {sessions.length - idx}
+                        </div>
+                        <span style={{ fontSize: 12, color: C.textSub, fontWeight: 500 }}>{formatDate(log.created_at)}</span>
+                        {log.source && <span style={{ fontSize: 11, color: C.textHint }}>· {log.source}</span>}
+                        {log.published && (
+                          <span style={{ marginLeft: "auto", fontSize: 10, color: C.green, fontWeight: 600, background: C.greenLight, padding: "1px 6px", borderRadius: 4 }}>발행</span>
+                        )}
+                      </div>
+
+                      {/* 녹음 파일 */}
+                      {log.audio_url ? (
+                        <div style={{ marginBottom: 8 }}>
+                          <div style={{ fontSize: 10, fontWeight: 600, color: C.textHint, marginBottom: 4 }}>🎙 녹음</div>
+                          <audio
+                            controls
+                            src={log.audio_url}
+                            style={{ width: "100%", height: 32 }}
+                            onClick={e => e.stopPropagation()}
+                          />
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: 11, color: C.textHint, marginBottom: 6 }}>녹음 없음</div>
+                      )}
+
+                      {/* 핵심 포인트 */}
+                      {(log.points || []).length > 0 && (
+                        <div style={{ fontSize: 12, color: C.textSub, lineHeight: 1.6, marginBottom: 8 }}>
+                          {(log.points || []).slice(0, 2).map((p, i) => (
+                            <div key={i} style={{ display: "flex", gap: 6 }}>
+                              <span style={{ color: C.primary, flexShrink: 0 }}>·</span>
+                              <span>{p}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <button
+                        onClick={() => navigate("detail", { log })}
+                        style={{ background: C.primaryLight, border: "none", color: C.primaryDark, fontSize: 11, fontWeight: 600, padding: "5px 12px", borderRadius: 6, cursor: "pointer" }}
+                      >
+                        상세 보기 →
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
         <div style={{ height: 70 }} />
       </div>
       <button onClick={() => navigate("new")} style={{ position: "absolute", bottom: 76, right: 20, width: 52, height: 52, background: C.primary, border: "none", borderRadius: "50%", cursor: "pointer", fontSize: 26, color: C.white, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10 }}>＋</button>
-      <TabBar active="recordings" navigate={navigate} />
+      <TabBar active="courses" navigate={navigate} />
     </div>
   );
 }
@@ -1104,7 +1155,7 @@ export default function App() {
 
   const screenMap = {
     home: <HomeScreen logs={logs} series={series} navigate={navigate} />,
-    recordings: <RecordingsScreen logs={logs} navigate={navigate} />,
+    courses: <CoursesScreen logs={logs} navigate={navigate} />,
     portfolio: <PortfolioScreen logs={logs} series={series} navigate={navigate} />,
     new: <NewScreen series={series} navigate={navigate} onSave={handleSave} />,
     detail: <DetailScreen navigate={navigate} log={params.log || logs[0] || {}} series={series} onDelete={handleDelete} />,
@@ -1118,7 +1169,7 @@ export default function App() {
     { key: "detail", label: "S03 상세" },
     { key: "draft", label: "S04 AI 초안" },
     { key: "success", label: "S05 발행 완료" },
-    { key: "recordings", label: "+ 녹음 목록" },
+    { key: "courses", label: "+ 강의별" },
     { key: "portfolio", label: "+ 포트폴리오" },
   ];
 
