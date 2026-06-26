@@ -147,33 +147,38 @@ function VoicePanel({ onClose, onDone }) {
     mr.start();
 
     // SpeechRecognition으로 실시간 텍스트 변환
-    const rec = new SR();
-    rec.lang = "ko-KR";
-    rec.continuous = true;
-    rec.interimResults = true;
-    recognitionRef.current = rec;
+    // onend마다 새 인스턴스 생성 — 같은 인스턴스 재사용 시 InvalidStateError 발생
+    const startRecognition = () => {
+      const rec = new SR();
+      rec.lang = "ko-KR";
+      rec.continuous = true;
+      rec.interimResults = true;
+      recognitionRef.current = rec;
+      rec.onresult = (e) => {
+        let interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const t = e.results[i][0].transcript;
+          if (e.results[i].isFinal) finalRef.current += t + " ";
+          else interim += t;
+        }
+        setTranscript(finalRef.current + interim);
+      };
+      rec.onerror = (e) => {
+        if (e.error === "no-speech" || e.error === "aborted") return;
+        isRecordingRef.current = false;
+        setPhase("idle");
+      };
+      rec.onend = () => {
+        if (isRecordingRef.current) {
+          setTimeout(startRecognition, 150);
+        }
+      };
+      try { rec.start(); } catch {}
+    };
+
     finalRef.current = "";
-    rec.onresult = (e) => {
-      let interim = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) finalRef.current += t + " ";
-        else interim += t;
-      }
-      setTranscript(finalRef.current + interim);
-    };
-    rec.onerror = (e) => {
-      if (e.error === "no-speech" || e.error === "aborted") return;
-      isRecordingRef.current = false;
-      setPhase("idle");
-    };
-    rec.onend = () => {
-      if (isRecordingRef.current) {
-        try { rec.start(); } catch {}
-      }
-    };
     isRecordingRef.current = true;
-    rec.start();
+    startRecognition();
     setPhase("recording");
     setTranscript("");
   };
