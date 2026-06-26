@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { supabase, isConfigured, uploadImage } from "./lib/supabase";
+import { supabase, isConfigured, uploadImage, uploadAudio } from "./lib/supabase";
 import { summarizeText, generateDraft } from "./lib/ai";
 
 const C = {
@@ -73,13 +73,13 @@ function AppBar({ left, title, right }) {
 function TabBar({ active, navigate }) {
   const tabs = [
     { id: "home", label: "홈", icon: "⌂" },
+    { id: "recordings", label: "녹음", icon: "🎙" },
     { id: "portfolio", label: "포트폴리오", icon: "◈" },
-    { id: "my", label: "마이", icon: "○" },
   ];
   return (
     <div style={s.tabBar}>
       {tabs.map(t => (
-        <button key={t.id} onClick={() => t.id !== "my" && navigate(t.id)}
+        <button key={t.id} onClick={() => navigate(t.id)}
           style={{ flex: 1, border: "none", background: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, color: active === t.id ? C.primary : C.textHint }}>
           <span style={{ fontSize: 20 }}>{t.icon}</span>
           <span style={{ fontSize: 10, fontWeight: active === t.id ? 600 : 400 }}>{t.label}</span>
@@ -111,6 +111,8 @@ function VoicePanel({ onClose, onDone }) {
   const [processStep, setProcessStep] = useState("");
   const [dotOn, setDotOn] = useState(true);
   const recognitionRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const audioBlobRef = useRef(null);
   const finalRef = useRef("");
   const fileInputRef = useRef(null);
   const isRecordingRef = useRef(false);
@@ -121,9 +123,30 @@ function VoicePanel({ onClose, onDone }) {
     return () => clearInterval(iv);
   }, [phase]);
 
-  const startRecording = () => {
+  const startRecording = async () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { alert("Chrome 브라우저에서만 음성 인식이 지원됩니다."); return; }
+
+    // MediaRecorder로 오디오 파일 캡처
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      alert("마이크 접근 권한이 필요합니다.");
+      return;
+    }
+    const chunks = [];
+    const mr = new MediaRecorder(stream);
+    mr.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    mr.onstop = () => {
+      audioBlobRef.current = new Blob(chunks, { type: mr.mimeType || "audio/webm" });
+      stream.getTracks().forEach(t => t.stop());
+    };
+    mediaRecorderRef.current = mr;
+    audioBlobRef.current = null;
+    mr.start();
+
+    // SpeechRecognition으로 실시간 텍스트 변환
     const rec = new SR();
     rec.lang = "ko-KR";
     rec.continuous = true;
@@ -155,10 +178,18 @@ function VoicePanel({ onClose, onDone }) {
     setTranscript("");
   };
 
-  const stopAndSummarize = () => {
+  const stopAll = () => {
     isRecordingRef.current = false;
     if (recognitionRef.current) recognitionRef.current.stop();
-    runSummarize(finalRef.current || transcript);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+  };
+
+  const stopAndSummarize = () => {
+    stopAll();
+    // MediaRecorder.onstop은 비동기이므로 짧게 대기 후 요약 시작
+    setTimeout(() => runSummarize(finalRef.current || transcript), 200);
   };
 
   const runSummarize = async (text) => {
@@ -178,7 +209,7 @@ function VoicePanel({ onClose, onDone }) {
       const result = await summarizeText(text);
       clearInterval(iv);
       setProgress(100);
-      setTimeout(() => onDone({ points: result.points || [], memo: result.memo || "" }), 300);
+      setTimeout(() => onDone({ points: result.points || [], memo: result.memo || "", audioBlob: audioBlobRef.current }), 300);
     } catch {
       clearInterval(iv);
       const sents = text.replace(/[.!?。]+/g, "|").split("|").map(s => s.trim()).filter(s => s.length > 6);
@@ -186,6 +217,7 @@ function VoicePanel({ onClose, onDone }) {
       setTimeout(() => onDone({
         points: [sents[0] || "", sents[1] || "", sents[2] || ""],
         memo: sents.slice(3, 5).join(" ") || text.slice(0, 100),
+        audioBlob: audioBlobRef.current,
       }), 300);
     }
   };
@@ -193,6 +225,7 @@ function VoicePanel({ onClose, onDone }) {
   const handleFile = (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    audioBlobRef.current = file;
     setPhase("processing");
     setProgress(0);
     setProcessStep(`"${file.name}" 변환 중...`);
@@ -206,6 +239,7 @@ function VoicePanel({ onClose, onDone }) {
         onDone({
           points: ["핵심 포인트 1", "핵심 포인트 2", "핵심 포인트 3"],
           memo: "파일에서 추출한 내용을 직접 편집해주세요.",
+          audioBlob: file,
         });
       }
     }, 50);
@@ -232,14 +266,14 @@ function VoicePanel({ onClose, onDone }) {
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
         <div style={{ width: 9, height: 9, borderRadius: "50%", background: dotOn ? C.red : "transparent", border: `1.5px solid ${C.red}`, flexShrink: 0 }} />
         <span style={{ fontSize: 13, fontWeight: 600, color: C.red }}>녹음 중</span>
-        <span style={{ fontSize: 11, color: C.textHint, marginLeft: "auto" }}>말씀하세요</span>
+        <span style={{ fontSize: 10, color: C.textHint, background: C.bg, padding: "2px 7px", borderRadius: 4, marginLeft: "auto" }}>💾 파일 저장 중</span>
       </div>
       <div style={{ background: C.bg, borderRadius: 10, padding: "10px 12px", minHeight: 72, fontSize: 13, color: C.text, lineHeight: 1.7, marginBottom: 12 }}>
         {transcript || <span style={{ color: C.textHint }}>음성을 인식하는 중...</span>}
       </div>
       <div style={{ display: "flex", gap: 8 }}>
         <button onClick={stopAndSummarize} style={{ flex: 2, background: C.primary, color: C.white, border: "none", borderRadius: 10, padding: "11px 0", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>완료 → AI 요약</button>
-        <button onClick={() => { isRecordingRef.current = false; if (recognitionRef.current) recognitionRef.current.stop(); onClose(); }} style={{ flex: 1, background: C.bg, color: C.textSub, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 0", fontSize: 13, cursor: "pointer" }}>취소</button>
+        <button onClick={() => { stopAll(); onClose(); }} style={{ flex: 1, background: C.bg, color: C.textSub, border: `1px solid ${C.border}`, borderRadius: 10, padding: "11px 0", fontSize: 13, cursor: "pointer" }}>취소</button>
       </div>
     </div>
   );
@@ -347,6 +381,85 @@ function HomeScreen({ logs, series, navigate }) {
   );
 }
 
+function RecordingsScreen({ logs, navigate }) {
+  // 강의/스터디 제목별로 그룹핑 (알파벳·가나다 순)
+  const grouped = {};
+  logs.forEach(log => {
+    const key = log.title || "제목 없음";
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(log);
+  });
+  const titles = Object.keys(grouped).sort((a, b) => a.localeCompare(b, "ko"));
+
+  return (
+    <div style={s.phone}>
+      <StatusBar />
+      <div style={{ ...s.appBar, justifyContent: "space-between" }}>
+        <span style={{ fontSize: 18, fontWeight: 700, color: C.text }}>녹음 목록</span>
+        <span style={{ fontSize: 11, color: C.textHint }}>{logs.filter(l => l.audio_url).length}개 파일</span>
+      </div>
+      <div style={s.scroll}>
+        {titles.length === 0 && (
+          <div style={{ textAlign: "center", padding: "40px 0", color: C.textHint, fontSize: 13, lineHeight: 2 }}>
+            녹음된 강의가 없어요.<br />
+            + 버튼으로 녹음하며 기록해보세요.
+          </div>
+        )}
+        {titles.map(title => (
+          <div key={title} style={{ marginBottom: 18 }}>
+            {/* 제목 헤더 */}
+            <div style={{ fontSize: 13, fontWeight: 700, color: C.text, marginBottom: 8, paddingBottom: 6, borderBottom: `1px solid ${C.border}` }}>
+              {title}
+              <span style={{ fontSize: 11, fontWeight: 400, color: C.textHint, marginLeft: 6 }}>{grouped[title].length}회</span>
+            </div>
+            {/* 해당 제목의 녹음 목록 */}
+            {grouped[title].map(log => (
+              <div key={log.id} style={{ background: C.white, borderRadius: 12, padding: "12px 14px", marginBottom: 8, border: `0.5px solid ${C.border}` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: log.audio_url ? 8 : 4 }}>
+                  <span style={s.tag(log.tag)}>{log.tag}</span>
+                  <span style={{ fontSize: 11, color: C.textHint, marginLeft: "auto" }}>{formatDate(log.created_at)}</span>
+                  {log.source && <span style={{ fontSize: 11, color: C.textHint }}>· {log.source}</span>}
+                </div>
+                {log.audio_url ? (
+                  <audio
+                    controls
+                    src={log.audio_url}
+                    style={{ width: "100%", height: 36, marginBottom: 8 }}
+                    onClick={e => e.stopPropagation()}
+                  />
+                ) : (
+                  <div style={{ fontSize: 11, color: C.textHint, fontStyle: "italic", marginBottom: 6, padding: "6px 0" }}>
+                    녹음 파일 없음
+                  </div>
+                )}
+                {(log.points || []).length > 0 && (
+                  <div style={{ fontSize: 12, color: C.textSub, lineHeight: 1.7 }}>
+                    {(log.points || []).slice(0, 2).map((p, i) => (
+                      <div key={i} style={{ display: "flex", gap: 6, alignItems: "flex-start" }}>
+                        <span style={{ color: C.primary, flexShrink: 0 }}>·</span>
+                        <span>{p}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button
+                  onClick={() => navigate("detail", { log })}
+                  style={{ marginTop: 8, background: "none", border: "none", color: C.primary, fontSize: 12, cursor: "pointer", padding: 0, fontWeight: 600 }}
+                >
+                  상세 보기 →
+                </button>
+              </div>
+            ))}
+          </div>
+        ))}
+        <div style={{ height: 70 }} />
+      </div>
+      <button onClick={() => navigate("new")} style={{ position: "absolute", bottom: 76, right: 20, width: 52, height: 52, background: C.primary, border: "none", borderRadius: "50%", cursor: "pointer", fontSize: 26, color: C.white, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10 }}>＋</button>
+      <TabBar active="recordings" navigate={navigate} />
+    </div>
+  );
+}
+
 function PortfolioScreen({ logs, series, navigate }) {
   const publishedLogs = logs.filter(l => l.published);
   const publishRate = logs.length > 0 ? Math.round((publishedLogs.length / logs.length) * 100) : 0;
@@ -431,14 +544,20 @@ function NewScreen({ series, navigate, onSave }) {
   const [showExtra, setShowExtra] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [audioBlob, setAudioBlob] = useState(null);
+  const [audioPreviewUrl, setAudioPreviewUrl] = useState("");
   const imageFileRef = useRef(null);
   const tags = ["마케팅", "독서", "개발", "디자인"];
 
-  const handleVoiceDone = ({ points: p, memo: m }) => {
+  const handleVoiceDone = ({ points: p, memo: m, audioBlob: blob }) => {
     setPoints([p[0] || "", p[1] || "", p[2] || ""]);
     setMemo(m || "");
     setAutoFilled(true);
     setShowVoice(false);
+    if (blob) {
+      setAudioBlob(blob);
+      setAudioPreviewUrl(URL.createObjectURL(blob));
+    }
   };
 
   const handleImageFile = async (e) => {
@@ -459,6 +578,10 @@ function NewScreen({ series, navigate, onSave }) {
     if (!title.trim()) { alert("제목을 입력해주세요."); return; }
     setSaving(true);
     try {
+      let audio_url = null;
+      if (audioBlob) {
+        audio_url = await uploadAudio(audioBlob);
+      }
       await onSave({
         title: title.trim(),
         source: source.trim() || null,
@@ -466,6 +589,7 @@ function NewScreen({ series, navigate, onSave }) {
         memo: memo.trim() || null,
         image_url: imageUrl.trim() || null,
         reference_url: referenceUrl.trim() || null,
+        audio_url,
         tag,
         series_id: seriesId || null,
         published: false,
@@ -498,9 +622,15 @@ function NewScreen({ series, navigate, onSave }) {
         )}
         {showVoice && <VoicePanel onClose={() => setShowVoice(false)} onDone={handleVoiceDone} />}
         {autoFilled && (
-          <div style={{ background: C.greenLight, borderRadius: 10, padding: "8px 12px", marginBottom: 12, fontSize: 11, color: C.green, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ background: C.greenLight, borderRadius: 10, padding: "8px 12px", marginBottom: 8, fontSize: 11, color: C.green, fontWeight: 600, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>✓ AI가 핵심 포인트와 메모를 자동으로 채웠어요</span>
             <button onClick={() => setShowVoice(true)} style={{ background: "none", border: "none", color: C.green, fontSize: 11, cursor: "pointer", fontWeight: 600, textDecoration: "underline", padding: 0 }}>다시</button>
+          </div>
+        )}
+        {audioPreviewUrl && (
+          <div style={{ background: C.white, borderRadius: 10, border: `1px solid ${C.border}`, padding: "10px 12px", marginBottom: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.textSub, marginBottom: 6 }}>🎙 녹음 파일 (저장 시 함께 보관)</div>
+            <audio controls src={audioPreviewUrl} style={{ width: "100%", height: 36 }} />
           </div>
         )}
 
@@ -974,6 +1104,7 @@ export default function App() {
 
   const screenMap = {
     home: <HomeScreen logs={logs} series={series} navigate={navigate} />,
+    recordings: <RecordingsScreen logs={logs} navigate={navigate} />,
     portfolio: <PortfolioScreen logs={logs} series={series} navigate={navigate} />,
     new: <NewScreen series={series} navigate={navigate} onSave={handleSave} />,
     detail: <DetailScreen navigate={navigate} log={params.log || logs[0] || {}} series={series} onDelete={handleDelete} />,
@@ -987,6 +1118,7 @@ export default function App() {
     { key: "detail", label: "S03 상세" },
     { key: "draft", label: "S04 AI 초안" },
     { key: "success", label: "S05 발행 완료" },
+    { key: "recordings", label: "+ 녹음 목록" },
     { key: "portfolio", label: "+ 포트폴리오" },
   ];
 
