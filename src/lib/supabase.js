@@ -21,6 +21,17 @@ export async function uploadImage(file) {
   return data.publicUrl
 }
 
+export async function uploadPdf(file) {
+  if (!supabase) return URL.createObjectURL(file)
+  const filename = `${Date.now()}_${Math.random().toString(36).slice(2)}.pdf`
+  const { error } = await supabase.storage
+    .from('documents')
+    .upload(filename, file, { upsert: true, contentType: 'application/pdf' })
+  if (error) throw error
+  const { data } = supabase.storage.from('documents').getPublicUrl(filename)
+  return data.publicUrl
+}
+
 export async function uploadAudio(blob) {
   // 데모 모드: 브라우저 세션 내에서만 유효한 로컬 URL 반환
   if (!supabase) return URL.createObjectURL(blob)

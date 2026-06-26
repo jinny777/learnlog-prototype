@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { supabase, isConfigured, uploadImage, uploadAudio } from "./lib/supabase";
+import { supabase, isConfigured, uploadImage, uploadAudio, uploadPdf } from "./lib/supabase";
+import { extractTextFromPdf } from "./lib/pdf";
 import { summarizeText, generateDraft } from "./lib/ai";
 
 const C = {
@@ -115,6 +116,7 @@ function VoicePanel({ onClose, onDone }) {
   const audioBlobRef = useRef(null);
   const finalRef = useRef("");
   const fileInputRef = useRef(null);
+  const pdfInputRef = useRef(null);
   const isRecordingRef = useRef(false);
 
   useEffect(() => {
@@ -250,18 +252,62 @@ function VoicePanel({ onClose, onDone }) {
     }, 50);
   };
 
+  const handlePdf = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setPhase("processing");
+    setProgress(10);
+    setProcessStep(`"${file.name}" 텍스트 추출 중...`);
+    try {
+      const text = await extractTextFromPdf(file);
+      setProgress(40);
+      setProcessStep("AI가 핵심 내용을 요약하는 중...");
+      let p = 40;
+      const iv = setInterval(() => {
+        p += 2;
+        setProgress(Math.min(p, 85));
+      }, 80);
+      try {
+        const result = await summarizeText(text);
+        clearInterval(iv);
+        setProgress(100);
+        setTimeout(() => onDone({
+          points: result.points || [],
+          memo: result.memo || "",
+          pdfFile: file,
+        }), 300);
+      } catch {
+        clearInterval(iv);
+        const sents = text.replace(/[.!?。]+/g, "|").split("|").map(s => s.trim()).filter(s => s.length > 6);
+        setProgress(100);
+        setTimeout(() => onDone({
+          points: [sents[0] || "", sents[1] || "", sents[2] || ""],
+          memo: sents.slice(3, 5).join(" ") || text.slice(0, 150),
+          pdfFile: file,
+        }), 300);
+      }
+    } catch (err) {
+      alert("PDF 텍스트 추출 실패: " + err.message);
+      setPhase("idle");
+    }
+  };
+
   if (phase === "idle") return (
     <div style={{ background: C.white, borderRadius: 14, border: `1px solid ${C.border}`, padding: "14px 16px", marginBottom: 14 }}>
-      <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 10 }}>음성으로 자동 기록</div>
-      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 10 }}>자동 기록 — AI가 요약해드려요</div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
         <button onClick={startRecording} style={{ flex: 1, background: C.primary, color: C.white, border: "none", borderRadius: 10, padding: "12px 0", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-          🎙 녹음 시작
+          🎙 녹음
         </button>
         <button onClick={() => fileInputRef.current?.click()} style={{ flex: 1, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 0", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
-          📁 파일 올리기
+          🎵 오디오
         </button>
-        <input ref={fileInputRef} type="file" accept="audio/*" style={{ display: "none" }} onChange={handleFile} />
+        <button onClick={() => pdfInputRef.current?.click()} style={{ flex: 1, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 0", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          📄 PDF
+        </button>
       </div>
+      <input ref={fileInputRef} type="file" accept="audio/*" style={{ display: "none" }} onChange={handleFile} />
+      <input ref={pdfInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handlePdf} />
       <button onClick={onClose} style={{ background: "none", border: "none", color: C.textHint, fontSize: 12, cursor: "pointer", padding: 0 }}>닫기</button>
     </div>
   );
@@ -602,10 +648,11 @@ function NewScreen({ series, navigate, onSave }) {
   const [uploading, setUploading] = useState(false);
   const [audioBlob, setAudioBlob] = useState(null);
   const [audioPreviewUrl, setAudioPreviewUrl] = useState("");
+  const [pdfFile, setPdfFile] = useState(null);
   const imageFileRef = useRef(null);
   const tags = ["마케팅", "독서", "개발", "디자인"];
 
-  const handleVoiceDone = ({ points: p, memo: m, audioBlob: blob }) => {
+  const handleVoiceDone = ({ points: p, memo: m, audioBlob: blob, pdfFile: pdf }) => {
     setPoints([p[0] || "", p[1] || "", p[2] || ""]);
     setMemo(m || "");
     setAutoFilled(true);
@@ -614,6 +661,7 @@ function NewScreen({ series, navigate, onSave }) {
       setAudioBlob(blob);
       setAudioPreviewUrl(URL.createObjectURL(blob));
     }
+    if (pdf) setPdfFile(pdf);
   };
 
   const handleImageFile = async (e) => {
@@ -635,9 +683,9 @@ function NewScreen({ series, navigate, onSave }) {
     setSaving(true);
     try {
       let audio_url = null;
-      if (audioBlob) {
-        audio_url = await uploadAudio(audioBlob);
-      }
+      if (audioBlob) audio_url = await uploadAudio(audioBlob);
+      let pdf_url = null;
+      if (pdfFile) pdf_url = await uploadPdf(pdfFile);
       await onSave({
         title: title.trim(),
         source: source.trim() || null,
@@ -646,6 +694,7 @@ function NewScreen({ series, navigate, onSave }) {
         image_url: imageUrl.trim() || null,
         reference_url: referenceUrl.trim() || null,
         audio_url,
+        pdf_url,
         tag,
         series_id: seriesId || null,
         published: false,
@@ -684,9 +733,19 @@ function NewScreen({ series, navigate, onSave }) {
           </div>
         )}
         {audioPreviewUrl && (
-          <div style={{ background: C.white, borderRadius: 10, border: `1px solid ${C.border}`, padding: "10px 12px", marginBottom: 12 }}>
+          <div style={{ background: C.white, borderRadius: 10, border: `1px solid ${C.border}`, padding: "10px 12px", marginBottom: 8 }}>
             <div style={{ fontSize: 11, fontWeight: 600, color: C.textSub, marginBottom: 6 }}>🎙 녹음 파일 (저장 시 함께 보관)</div>
             <audio controls src={audioPreviewUrl} style={{ width: "100%", height: 36 }} />
+          </div>
+        )}
+        {pdfFile && (
+          <div style={{ background: C.white, borderRadius: 10, border: `1px solid ${C.border}`, padding: "10px 14px", marginBottom: 12, display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 22 }}>📄</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{pdfFile.name}</div>
+              <div style={{ fontSize: 11, color: C.textHint }}>{(pdfFile.size / 1024).toFixed(0)} KB · 저장 시 함께 보관</div>
+            </div>
+            <button onClick={() => setPdfFile(null)} style={{ background: "none", border: "none", color: C.textHint, fontSize: 16, cursor: "pointer", padding: 4, flexShrink: 0 }}>✕</button>
           </div>
         )}
 
